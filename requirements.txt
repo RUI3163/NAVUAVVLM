@@ -1,0 +1,10 @@
+# Python 3.11
+numpy
+opencv-python
+pydantic>=2.5
+pytest
+# Project AirSim client (NOT classic AirSim):
+#   git clone https://github.com/iamaisim/ProjectAirSim
+#   pip install -e ProjectAirSim/client/python/projectairsim
+pyyaml
+networkx

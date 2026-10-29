@@ -133,3 +133,55 @@ def test_eval_flags_wrong_leg_as_right_place_wrong_node():
     rep = evaluate_replay(nodes, q, [r], LocCfg())
     assert rep["within_8m"] == 1.0 and rep["within_one_node"] == 0.0 and rep["right_place_wrong_node"] == 1
     assert rep["n_failures"] == 1
+
+
+def test_reasons_warmup_gate_empty_vote_spread():
+    rng, base = _world(alias=False)
+    nodes, E = _nodes_and_emb(rng, base)
+    loc = _localizer(nodes, E)
+    q = _query(rng, base)
+    rs = [loc.step(f["emb"], f["odo"][:2]) for f in q[:4]]
+    assert [r.reason for r in rs] == ["warmup", "warmup", "warmup", "fix"]
+    far = _localizer(nodes, E)
+    r = far.step(q[0]["emb"], [5000.0, 0.0])                       # predicted position nowhere near the map
+    assert r.reason == "gate_empty" and r.n_gated == 0
+    cfg = LocCfg(gate_sigma_k=50.0)
+    loc2 = _localizer(nodes, E, cfg)
+    q[1]["emb"] = l2_normalize(base[0][14] + 0.01 * rng.normal(size=384).astype(np.float32))
+    rs2 = [loc2.step(f["emb"], f["odo"][:2]) for f in q[:4]]
+    assert rs2[3].reason == "vote_spread" and rs2[3].spread_m > 1.5 * SP
+
+
+def test_fused_error_and_colocated_turn_nodes():
+    # two in-place yaw keyframes (same spot, same heading, idx 3 apart): fix on the other one is NOT a failure
+    nodes = [{"id": 0, "root": 0, "idx": 0, "gt": [50.0, 0.0, 0.0]},
+             {"id": 1, "root": 0, "idx": 3, "gt": [50.0, 0.3, 0.0]}]
+    q = [{"id": 9, "root": 2, "idx": 0, "gt": [50.0, 2.0, 0.0]}]
+    from vlnav.localization import Fix, LocResult
+    r = LocResult(Fix(1, 1, (50.0, 5.0), 0.0, 0.9), 1, 1, 2, 10.0, 1.0, False, 0.0, "fix")
+    rep = evaluate_replay(nodes, q, [r], LocCfg())
+    assert rep["within_one_node"] == 1.0 and rep["n_failures"] == 0
+    assert math.isclose(rep["fused_err_median_m"], 3.0) and rep["fused_within_5m"] == 1.0
+    assert rep["no_fix_frames"] == []
+
+
+def test_true_node_tie_break_uses_heading_for_turn_keyframes():
+    # in-place turn: 5 keyframes at one spot, yaw 0,30,60,90,120 deg. Query yaw 62 deg; fix on the 60-deg keyframe is RIGHT.
+    nodes = [{"id": i, "root": 0, "idx": 10 + i, "gt": [50.0, 0.0, math.radians(30 * i)]} for i in range(5)]
+    q = [{"id": 99, "root": 2, "idx": 0, "gt": [50.0, 4.0, math.radians(62)]}]
+    from vlnav.localization import Fix, LocResult
+    def res(node):
+        return LocResult(Fix(node, node, (50.0, 4.0), 0.0, 0.9), node, node, 5, 10.0, 1.0, False, 0.0, "fix")
+    ok = evaluate_replay(nodes, q, [res(2)], LocCfg())
+    assert ok["n_failures"] == 0 and ok["frames"][0]["true_node"] == 2
+    bad = evaluate_replay(nodes, q, [res(4)], LocCfg())            # 2 keyframes (60 deg) away from the true heading
+    assert bad["within_one_node"] == 0.0 and bad["n_failures"] == 1
+
+
+def test_fused_error_components_north_east():
+    nodes = [{"id": 0, "root": 0, "idx": 0, "gt": [0.0, 0.0, 0.0]}]
+    q = [{"id": 9, "root": 2, "idx": 0, "gt": [10.0, 2.0, 0.0]}]
+    from vlnav.localization import Fix, LocResult
+    r = LocResult(Fix(0, 0, (13.0, 0.0), 0.0, 0.9), 0, 0, 1, 10.0, 1.0, False, 0.0, "fix")
+    rep = evaluate_replay(nodes, q, [r], LocCfg())
+    assert math.isclose(rep["fused_abs_north_median_m"], 3.0) and math.isclose(rep["fused_abs_east_median_m"], 2.0)

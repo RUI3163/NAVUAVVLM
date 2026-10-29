@@ -27,6 +27,7 @@ class SimInterface:
         self.cfg = cfg
         self.client = self.world = self.drone = None
         self.calls: List[str] = []              # exact client calls made, for the M0 report
+        self._pending: set = set()              # fire-and-forget command tasks (keeps references alive)
 
     def _log(self, s: str) -> None:
         self.calls.append(s)
@@ -73,6 +74,21 @@ class SimInterface:
         if not any(c.startswith("drone.move_by_velocity_async(vn") for c in self.calls):
             self._log("drone.move_by_velocity_async(vn, ve, vd, duration=duration, yaw_is_rate=True, yaw=yaw_rate)")
         await (await self.drone.move_by_velocity_async(vn, ve, vd, duration=duration, yaw_is_rate=True, yaw=yaw_rate))
+
+    async def velocity_nowait(self, vn: float, ve: float, vd: float, duration: float, yaw_rate: float = 0.0):
+        """NON-BLOCKING velocity command for the 20 Hz control loop. Source: projectairsim client.request_async --
+        the first await only sends the request (asend) and returns a background task; completion is NOT awaited here.
+        A failed command task makes the client disconnect (client.check_for_exception), so tasks are tracked."""
+        if not any(c.startswith("drone.move_by_velocity_async(...nowait") for c in self.calls):
+            self._log("drone.move_by_velocity_async(...nowait: await once, never await the returned task)")
+        task = await self.drone.move_by_velocity_async(vn, ve, vd, duration=duration, yaw_is_rate=True, yaw=yaw_rate)
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+        return task
+
+    @property
+    def pending_commands(self) -> int:
+        return len(self._pending)
 
     async def hover(self) -> None:
         await (await self.drone.hover_async()); self._log("await (await drone.hover_async())")

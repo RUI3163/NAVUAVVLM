@@ -89,6 +89,50 @@ class LocCfg:
     lost_after_frames: int = 8           # frames without an accepted fix before `lost` is reported
     match_radius_m: float = 8.0          # evaluation: "within 8 m"
     same_heading_deg: float = 60.0       # evaluation: heading window for the ground-truth nearest node
+    colocate_m: float = 1.0              # evaluation: nodes this close (ground truth) are co-located
+    colocate_heading_deg: float = 15.0   # ...and count as ONE place only if headings differ by less than this (half a keyframe yaw step)
+
+
+@dataclass
+class ControlCfg:
+    """Control loop. cmd_duration_s is >2x the max command gap measured with image fetches running (94 ms)."""
+    hz: float = 20.0
+    cmd_duration_s: float = 0.2           # commands self-expire (measured: drone stops after expiry) -> fail-safe
+    cruise_mps: float = 3.0
+    lookahead_m: float = 6.0
+    arrive_tol_m: float = 1.0
+    min_speed_mps: float = 0.8
+    end_slow_gain: float = 0.6            # speed = gain * distance to the end of the path, inside the slowdown zone
+    roi_w_frac: float = 0.25              # forward-clearance ROI: central fraction of the depth image
+    roi_h_frac: float = 0.20
+    clear_pct: float = 2.0                # low percentile of ROI depth (thin wires may not show up in depth!)
+    clear_slow_m: float = 15.0            # full speed above this clearance
+    clear_stop_m: float = 6.0             # speed 0 at or below this clearance
+    forward_cone_cos: float = 0.7         # clearance applies when the command is within ~45 deg of the camera axis
+    hb_timeout_s: float = 1.0             # hover if the mission-manager heartbeat is older than this
+
+
+@dataclass
+class ArrivalCfg:
+    consec_frames: int = 3                # localiser must report the goal (or neighbour) this many frames in a row
+    pos_tol_m: float = 5.0                # corrected odometry within this of the goal node
+
+
+@dataclass
+class RecoveryCfg:
+    scan_rate_rad_s: float = 0.5          # yaw rate while re-localising (360 deg takes ~12.6 s)
+    reacquire_s: float = 5.0
+    max_attempts: int = 3
+
+
+@dataclass
+class MissionCfg:
+    prompt: str = "Take off from the house, follow the road straight ahead until you reach the first intersection, and stop there."
+    # SCENARIO PRIOR (hand-fed, not sensed): the road lies this far to the LEFT (west) of the take-off point.
+    # Executed open-loop from commanded velocity (never ground truth). Value from the M1 survey (23.5 m).
+    approach_left_m: float = 23.5
+    approach_speed_mps: float = 3.0
+    waypoint_tol_m: float = 1.0           # Douglas-Peucker tolerance when simplifying the planned path
 
 
 @dataclass
@@ -100,6 +144,10 @@ class Config:
     map: MapCfg = field(default_factory=MapCfg)
     features: FeatureCfg = field(default_factory=FeatureCfg)
     loc: LocCfg = field(default_factory=LocCfg)
+    control: ControlCfg = field(default_factory=ControlCfg)
+    arrival: ArrivalCfg = field(default_factory=ArrivalCfg)
+    recovery: RecoveryCfg = field(default_factory=RecoveryCfg)
+    mission: MissionCfg = field(default_factory=MissionCfg)
     logs_dir: str = "logs"
     runs_dir: str = "runs"
     seed: int = 0

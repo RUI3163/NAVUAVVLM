@@ -35,6 +35,8 @@ class LocResult:
     gate_m: float                   # gate radius for a node with no mapping drift
     sigma_m: float                  # live position sigma
     lost: bool
+    spread_m: Optional[float] = None    # vote spread when the window was full
+    reason: str = ""                    # fix | warmup | gate_empty | vote_spread
 
 
 def cumulative_odo_distance(xy: np.ndarray, root: np.ndarray, idx: np.ndarray) -> np.ndarray:
@@ -88,6 +90,7 @@ class Localizer:
         lost = self.frames_since_fix > c.lost_after_frames
         res = LocResult(None, None, raw, int(mask.sum()), floor + c.gate_sigma_k * sig, sig, lost)
         if not mask.any():
+            res.reason = "gate_empty"
             return res
         cand = np.where(mask)[0]
         cand = cand[np.argsort(-sims[cand])][: c.top_k]
@@ -95,15 +98,19 @@ class Localizer:
         res.top1 = top1
         self._hist.append((top1, odo.copy(), float(sims[top1])))
         if len(self._hist) < c.vote_frames:
+            res.reason = "warmup"
             return res
         P = np.array([self.xy[i] + (odo - o) for i, o, _ in self._hist])      # votes transported to "now"
         spread = float(np.max(np.linalg.norm(P[:, None] - P[None], axis=-1)))
+        res.spread_m = spread
         if spread > c.vote_spread_factor * self.spacing:
+            res.reason = "vote_spread"
             return res
         m = np.median(P, axis=0)
         node = int(cand[np.argmin(np.linalg.norm(self.xy[cand] - m, axis=1))])  # appearance-gated, vote-consistent
         self.offset = m - odo
         self.dist_since_fix, self.fixed, self.frames_since_fix = 0.0, True, 0
         res.fix = Fix(node, int(self.ids[node]), (float(m[0]), float(m[1])), spread, float(sims[node]))
+        res.reason = "fix"
         res.lost = False
         return res
